@@ -2,7 +2,6 @@ package fi.dy.masa.litematica.gui;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 
 import net.minecraft.client.MinecraftClient;
 
@@ -21,7 +20,9 @@ import fi.dy.masa.malilib.interfaces.ICompletionListener;
 import fi.dy.masa.malilib.util.FileUtils;
 import fi.dy.masa.malilib.util.GuiUtils;
 import fi.dy.masa.malilib.util.StringUtils;
+import fi.dy.masa.malilib.util.time.TimeFormat;
 import fi.dy.masa.litematica.Reference;
+import fi.dy.masa.litematica.config.Configs;
 import fi.dy.masa.litematica.data.DataManager;
 import fi.dy.masa.litematica.gui.GuiMainMenu.ButtonListenerChangeMenu;
 import fi.dy.masa.litematica.gui.widgets.WidgetListMaterialList;
@@ -112,10 +113,7 @@ public class GuiMaterialList extends GuiListBase<MaterialListEntry, WidgetMateri
         x += this.createButton(x, y, -1, ButtonListener.Type.CLEAR_IGNORED) + gap;
         x += this.createButton(x, y, -1, ButtonListener.Type.CLEAR_CACHE) + gap;
         x += this.createButton(x, y, -1, ButtonListener.Type.WRITE_TO_FILE) + gap;
-        if (Reference.EXPERIMENTAL)
-        {
-            x += this.createButton(x, y, -1, ButtonListener.Type.WRITE_TO_JSON) + gap;
-        }
+        x += this.createButton(x, y, -1, ButtonListener.Type.WRITE_TO_JSON) + gap;
         y += 22;
 
         y = this.getScreenHeight() - 36;
@@ -165,7 +163,7 @@ public class GuiMaterialList extends GuiListBase<MaterialListEntry, WidgetMateri
     private int createButton(int x, int y, int width, ButtonListener.Type type)
     {
         ButtonListener listener = new ButtonListener(type, this);
-        String label = "";
+        String label;
 
         if (type == ButtonListener.Type.LIST_TYPE)
         {
@@ -186,7 +184,7 @@ public class GuiMaterialList extends GuiListBase<MaterialListEntry, WidgetMateri
         {
             button.setHoverStrings("litematica.gui.button.hover.material_list.write_hold_shift_for_csv");
         }
-        else if (type == ButtonListener.Type.WRITE_TO_JSON && Reference.EXPERIMENTAL)
+        else if (type == ButtonListener.Type.WRITE_TO_JSON)
         {
             button.setHoverStrings("litematica.gui.button.hover.material_list.json_hold_shift_for_missing_only");
         }
@@ -205,10 +203,7 @@ public class GuiMaterialList extends GuiListBase<MaterialListEntry, WidgetMateri
         width += this.getStringWidth(ButtonListener.Type.CLEAR_IGNORED.getDisplayName());
         width += this.getStringWidth(ButtonListener.Type.CLEAR_CACHE.getDisplayName());
         width += this.getStringWidth(ButtonListener.Type.WRITE_TO_FILE.getDisplayName());
-        if (Reference.EXPERIMENTAL)
-        {
-            width += this.getStringWidth(ButtonListener.Type.WRITE_TO_JSON.getDisplayName());
-        }
+        width += this.getStringWidth(ButtonListener.Type.WRITE_TO_JSON.getDisplayName());
         width += (new ButtonOnOff(0, 0, -1, false, ButtonListener.Type.HIDE_AVAILABLE.getTranslationKey(), false)).getWidth();
         width += (new ButtonOnOff(0, 0, -1, false, ButtonListener.Type.TOGGLE_INFO_HUD.getTranslationKey(), false)).getWidth();
         width += this.getStringWidth(StringUtils.translate("litematica.gui.label.material_list.multiplier"));
@@ -314,54 +309,74 @@ public class GuiMaterialList extends GuiListBase<MaterialListEntry, WidgetMateri
                     {
                         String key = "litematica.message.material_list_written_to_file";
                         this.parent.addMessage(MessageType.SUCCESS, key, file.getFileName().toString());
-                        StringUtils.sendOpenFileChatMessage(this.parent.mc.player, key, file.toFile());
+                        if (this.parent.mc.player != null)
+                        {
+                            StringUtils.sendOpenFileChatMessage(this.parent.mc.player, key, file.toFile());
+                        }
                     }
                     break;
 
                 case WRITE_TO_JSON:
-                    if (!Reference.EXPERIMENTAL) break;
                     MinecraftClient mc = MinecraftClient.getInstance();
                     Path jsonDir = FileUtils.getConfigDirectoryAsPath().resolve(Reference.MOD_ID);
                     boolean missingOnly = GuiBase.isShiftDown();
-                    String fileName = "raw_materials_detailed" + (missingOnly ? "_missing_only" : "");
+                    boolean craftingOnly = GuiBase.isAltDown();
+                    final String dateExt = "_" + TimeFormat.REGULAR.formatNow();
+                    String fileName = "raw_material_list_recipe_details" + (missingOnly ? "_missing_only" : "") + dateExt;
                     MaterialListJson jsonWriter = new MaterialListJson();
                     Path jsonFile = jsonDir.resolve(fileName+".json");
                     MaterialListJsonCache cache = new MaterialListJsonCache();
 
-                    if (!this.getMaterialListForJson(materialList, jsonWriter, cache, missingOnly))
+                    if (!this.getMaterialListForJson(materialList, jsonWriter, cache, missingOnly, craftingOnly))
                     {
                         String key = "litematica.message.error.json_material_list_copy_failure";
                         this.parent.addMessage(MessageType.ERROR, key, jsonFile.getFileName().toString());
+                        cache.clearAll();
+                        jsonWriter.clear();
                         break;
                     }
 
-                    if (!jsonWriter.writeJson(jsonFile, mc))
+                    if (Configs.Generic.MATERIAL_LIST_RECIPE_DETAILS.getBooleanValue() &&
+                        !jsonWriter.writeRecipeDetailJson(jsonFile, mc))
                     {
-//                        String key = "litematica.message.material_list_written_to_json_file";
-//                        this.parent.addMessage(MessageType.SUCCESS, key, jsonFile.getFileName().toString());
-//                    }
-//                    else
-//                    {
                         String key = "litematica.message.error.json_material_list_failure";
                         this.parent.addMessage(MessageType.ERROR, key, jsonFile.getFileName().toString());
+                        cache.clearAll();
+                        jsonWriter.clear();
                         break;
                     }
 
-                    fileName = "raw_materials_list" + (missingOnly ? "_missing_only" : "");
+                    fileName = "raw_material_list_recipe_steps" + (missingOnly ? "_missing_only" : "") + dateExt;
                     jsonFile = jsonDir.resolve(fileName+".json");
 
-                    if (jsonWriter.writeCacheJson(cache, jsonFile, mc))
+                    if (!jsonWriter.writeCacheFlatJson(cache, jsonFile, mc))
+                    {
+                        String key = "litematica.message.error.json_material_list_failure";
+                        this.parent.addMessage(MessageType.ERROR, key, jsonFile.getFileName().toString());
+                        cache.clearAll();
+                        jsonWriter.clear();
+                        break;
+                    }
+
+                    fileName = "raw_material_list_simplified" + (missingOnly ? "_missing_only" : "") + dateExt;
+                    jsonFile = jsonDir.resolve(fileName+".json");
+
+                    if (jsonWriter.writeCacheCombinedJson(cache, jsonFile, mc))
                     {
                         String key = "litematica.message.material_list_written_to_json_file";
                         this.parent.addMessage(MessageType.SUCCESS, key, jsonFile.getFileName().toString());
-                        StringUtils.sendOpenFileChatMessage(this.parent.mc.player, key, jsonFile.toFile());
+                        if (this.parent.mc.player != null)
+                        {
+                            StringUtils.sendOpenFileChatMessage(this.parent.mc.player, key, jsonFile.toFile());
+                        }
                     }
                     else
                     {
                         String key = "litematica.message.error.json_material_list_failure";
                         this.parent.addMessage(MessageType.ERROR, key, jsonFile.getFileName().toString());
                     }
-                    cache.clear();
+
+                    cache.clearAll();
                     jsonWriter.clear();
                     break;
             }
@@ -374,9 +389,8 @@ public class GuiMaterialList extends GuiListBase<MaterialListEntry, WidgetMateri
             DataDump dump = new DataDump(4, csv ? DataDump.Format.CSV : DataDump.Format.ASCII);
             int multiplier = materialList.getMultiplier();
 
-            ArrayList<MaterialListEntry> list = new ArrayList<>();
-            list.addAll(materialList.getMaterialsFiltered(false));
-            Collections.sort(list, new MaterialListSorter(materialList));
+            ArrayList<MaterialListEntry> list = new ArrayList<>(materialList.getMaterialsFiltered(false));
+            list.sort(new MaterialListSorter(materialList));
 
             for (MaterialListEntry entry : list)
             {
@@ -398,16 +412,15 @@ public class GuiMaterialList extends GuiListBase<MaterialListEntry, WidgetMateri
             return dump;
         }
 
-        private boolean getMaterialListForJson(MaterialListBase materialList, MaterialListJson jsonWriter, MaterialListJsonCache cache, boolean missingOnly)
+        private boolean getMaterialListForJson(MaterialListBase materialList, MaterialListJson jsonWriter, MaterialListJsonCache cache, boolean missingOnly, boolean craftingOnly)
         {
-            if (!Reference.EXPERIMENTAL) return false;
             if (missingOnly)
             {
-                return jsonWriter.readMaterialListMissingOnly(materialList, cache);
+                return jsonWriter.readMaterialListMissingOnly(materialList, cache, craftingOnly);
             }
             else
             {
-                return jsonWriter.readMaterialListAll(materialList, cache);
+                return jsonWriter.readMaterialListAll(materialList, cache, craftingOnly);
             }
         }
 

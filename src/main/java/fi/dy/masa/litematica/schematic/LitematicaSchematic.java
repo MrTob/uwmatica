@@ -11,7 +11,6 @@ import com.google.common.collect.ImmutableMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import org.apache.commons.lang3.tuple.Pair;
 
-import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.minecraft.SharedConstants;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
@@ -387,6 +386,11 @@ public class LitematicaSchematic
         {
             SubRegionPlacement placement = relativePlacements.get(regionName);
 
+			if (placement == null)
+			{
+				continue;
+			}
+
             if (placement.isEnabled())
             {
                 BlockPos regionPos = placement.getPos();
@@ -741,11 +745,24 @@ public class LitematicaSchematic
                     else
                     {
                         NbtView view = NbtView.getWriter(world.getRegistryManager());
-                        entity.writeData(view.getWriter());
-                        tag = view.readNbt() != null ? view.readNbt() : new NbtCompound();
-                        Identifier id = EntityType.getId(entity.getType());
-                        tag.putString("id", id.toString());
+
+                        // Checks for Vehicle
+                        if (entity.saveData(view.getWriter()))
+                        {
+                            tag = view.readNbt() != null ? view.readNbt() : new NbtCompound();
+                            Identifier id = EntityType.getId(entity.getType());
+                            tag.putString("id", id.toString());
+                        }
                     }
+
+//                    boolean hasVehicle = entity.hasVehicle();
+//                    boolean fixPassengers = tag.contains("Passengers");
+//                    Litematica.LOGGER.error("takeEntitiesFromWorldWithinChunk(): UUID: [{}], HasVehicle({}), HasPassengers({}), NBT: [{}]", uuid.toString(), hasVehicle, fixPassengers, tag.toString());
+
+//                    if (fixPassengers)
+//                    {
+//                        tag.put("Passengers", EntityUtils.updatePassengersToRelativeRegionPos(tag.getListOrEmpty("Passengers"), regionPosAbs));
+//                    }
 
                     if (!tag.isEmpty())
                     {
@@ -2778,7 +2795,13 @@ public class LitematicaSchematic
     @Nullable
     public static SchematicMetadata readMetadataFromFile(Path dir, String fileName)
     {
-        Path file = dir.resolve(fileName);
+		if (dir == null)
+		{
+			Litematica.LOGGER.error("LitematicaSchematic#readMetadataFromFile(): dir is NULL; please correct this when loading files.");
+			return null;
+		}
+
+		Path file = dir.resolve(fileName);
         FileType type = FileType.fromFile(file);
 
         if (type == FileType.INVALID)
@@ -2856,7 +2879,13 @@ public class LitematicaSchematic
     @Nullable
     public static Pair<SchematicSchema, SchematicMetadata> readMetadataAndVersionFromFile(Path dir, String fileName)
     {
-        Path file = dir.resolve(fileName);
+		if (dir == null)
+		{
+			Litematica.LOGGER.error("LitematicaSchematic#readMetadataAndVersionFromFile(): dir is NULL; please correct this when loading files.");
+			return null;
+		}
+
+		Path file = dir.resolve(fileName);
         FileType type = FileType.fromFile(file);
 
         if (type == FileType.INVALID)
@@ -2952,7 +2981,13 @@ public class LitematicaSchematic
     @Nullable
     public static SchematicSchema readDataVersionFromFile(Path dir, String fileName)
     {
-        Path file = dir.resolve(fileName);
+		if (dir == null)
+		{
+			Litematica.LOGGER.error("LitematicaSchematic#readDataVersionFromFile(): dir is NULL; please correct this when loading files.");
+			return null;
+		}
+
+		Path file = dir.resolve(fileName);
         FileType type = FileType.fromFile(file);
 
         if (type == FileType.INVALID)
@@ -3024,6 +3059,12 @@ public class LitematicaSchematic
     @Nullable
     public static LitematicaSchematic createFromFile(Path dir, String fileName, FileType schematicType)
     {
+		if (dir == null)
+		{
+			Litematica.LOGGER.error("LitematicaSchematic#createFromFile(): dir is NULL; please correct this when loading files.");
+			return null;
+		}
+
         Path file = fileFromDirAndName(dir, fileName, schematicType);
         LitematicaSchematic schematic = new LitematicaSchematic(file, schematicType);
 

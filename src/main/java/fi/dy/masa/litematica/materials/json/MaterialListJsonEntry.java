@@ -8,36 +8,29 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
+import org.apache.commons.lang3.math.Fraction;
 import org.apache.commons.lang3.tuple.Pair;
-import org.jetbrains.annotations.ApiStatus;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
 import net.minecraft.recipe.Ingredient;
 import net.minecraft.recipe.NetworkRecipeId;
 import net.minecraft.recipe.RecipeDisplayEntry;
 import net.minecraft.recipe.book.RecipeBookCategory;
 import net.minecraft.recipe.display.SlotDisplay;
-import net.minecraft.registry.Registries;
 import net.minecraft.registry.RegistryOps;
 import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.registry.entry.RegistryEntryList;
-import net.minecraft.registry.tag.ItemTags;
 import net.minecraft.util.context.ContextParameterMap;
 import net.minecraft.util.math.MathHelper;
 
 import fi.dy.masa.malilib.mixin.recipe.IMixinIngredient;
 import fi.dy.masa.malilib.util.game.RecipeBookUtils;
-import fi.dy.masa.malilib.util.log.AnsiLogger;
-import fi.dy.masa.litematica.Litematica;
-import fi.dy.masa.litematica.data.CachedTagManager;
 
-@ApiStatus.Experimental
 public class MaterialListJsonEntry
 {
-    private static final AnsiLogger LOGGER = new AnsiLogger(MaterialListJsonEntry.class, true, true);
+//    private static final AnsiLogger LOGGER = new AnsiLogger(MaterialListJsonEntry.class, true, true);
     private final List<MaterialListJsonBase> requirements;
     private final RegistryEntry<Item> inputItem;
     private final int total;
@@ -56,31 +49,35 @@ public class MaterialListJsonEntry
         this.type = type;
     }
 
-    public static @Nullable MaterialListJsonEntry build(RegistryEntry<Item> input, final int total, List<RecipeBookUtils.Type> types, @Nullable RegistryEntry<Item> prevItem)
+    public static @Nullable MaterialListJsonEntry build(RegistryEntry<Item> input, final int total, List<RecipeBookUtils.Type> types, @Nullable RegistryEntry<Item> prevItem, boolean craftingOnly)
     {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (input == null || mc.world == null) return null;
+
+        Pair<RegistryEntry<Item>, Integer> itemOverride = MaterialListJsonOverrides.INSTANCE.matchOverride(input, total);
+
         if (types.isEmpty())
         {
             // No types to match (Remaining logic)
-            return new MaterialListJsonEntry(input, total, Type.EMPTY);
+            return new MaterialListJsonEntry(itemOverride.getLeft(), itemOverride.getRight(), Type.EMPTY);
         }
 
-        ItemStack shadow = new ItemStack(input);
+        ItemStack shadow = new ItemStack(itemOverride.getLeft());
         List<Pair<NetworkRecipeId, RecipeDisplayEntry>> lookup = RecipeBookUtils.getDisplayEntryFromRecipeBook(shadow, types);
+        ContextParameterMap map = RecipeBookUtils.getMap(mc);
 
-        if (lookup.isEmpty())
+        if (lookup.isEmpty() || MaterialListJsonOverrides.INSTANCE.shouldKeepItemOrBlock(itemOverride.getLeft()))
         {
-            // No recipes found.
-            return new MaterialListJsonEntry(input, total, Type.LAST);
+            // No recipes found / Packed Item/Block (Such as Iron Blocks)
+            return new MaterialListJsonEntry(itemOverride.getLeft(), itemOverride.getRight(), Type.LAST);
         }
 
         final int lookupCount = lookup.size();
         final Type outType = lookupCount > 1 ? Type.MULTI : Type.ONE;
 
-        Litematica.LOGGER.warn("MaterialListJsonEntry#build(): Found [{}] recipe(s) for item [{}]", lookupCount, input.getIdAsString());
+//        LOGGER.warn("MaterialListJsonEntry#build(): Found [{}] recipe(s) for item [{}]", lookupCount, itemOverride.getLeft().getIdAsString());
 
-        MaterialListJsonEntry result = new MaterialListJsonEntry(input, total, outType);
+        MaterialListJsonEntry result = new MaterialListJsonEntry(itemOverride.getLeft(), itemOverride.getRight(), outType);
         result.recipeRequirements = new HashMap<>();
         result.recipeCategory = new HashMap<>();
         result.recipeTypes = new HashMap<>();
@@ -90,17 +87,83 @@ public class MaterialListJsonEntry
         Pair<NetworkRecipeId, RecipeDisplayEntry> pair = lookup.getFirst();
         NetworkRecipeId id = pair.getLeft();
         RecipeDisplayEntry entry = pair.getRight();
-        RecipeBookCategory category = entry.category();
-        RecipeBookUtils.Type type = RecipeBookUtils.Type.fromRecipeDisplay(entry.display());
-        ContextParameterMap map = RecipeBookUtils.getMap(mc);
         List<ItemStack> resultStacks = entry.getStacks(map);
         ItemStack resultStack = resultStacks.getFirst();
         int resultCount = resultStack.getCount();
+        RecipeBookCategory category = entry.category();
+        RecipeBookUtils.Type type = RecipeBookUtils.Type.fromRecipeDisplay(entry.display());
+
+        // Select Stonecutter / Crafting type based on ALT input
+        if (lookup.size() > 1)
+        {
+            if (craftingOnly && type == RecipeBookUtils.Type.STONECUTTER)
+            {
+                Pair<NetworkRecipeId, RecipeDisplayEntry> altPair = lookup.get(1);
+                RecipeDisplayEntry altEntry = altPair.getRight();
+                RecipeBookUtils.Type altType = RecipeBookUtils.Type.fromRecipeDisplay(altEntry.display());
+
+                if (altType == RecipeBookUtils.Type.SHAPED || altType == RecipeBookUtils.Type.SHAPELESS)
+                {
+//                    LOGGER.warn("MaterialListJsonEntry#build(): Found alternate Crafting type recipe(s) for item [{}] over Stonecutter type", itemOverride.getLeft().getIdAsString());
+                    id = altPair.getLeft();
+                    entry = altEntry;
+                    resultStacks = entry.getStacks(map);
+                    resultStack = resultStacks.getFirst();
+                    resultCount = resultStack.getCount();
+                    category = entry.category();
+                    type = altType;
+                }
+            }
+            else if (!craftingOnly &&
+                    (type == RecipeBookUtils.Type.SHAPED || type == RecipeBookUtils.Type.SHAPELESS))
+            {
+                Pair<NetworkRecipeId, RecipeDisplayEntry> altPair = lookup.get(1);
+                RecipeDisplayEntry altEntry = altPair.getRight();
+                RecipeBookUtils.Type altType = RecipeBookUtils.Type.fromRecipeDisplay(altEntry.display());
+
+                if (altType == RecipeBookUtils.Type.STONECUTTER)
+                {
+//                    LOGGER.warn("MaterialListJsonEntry#build(): Found alternate Stonecutter type recipe(s) for item [{}] over Crafting type", itemOverride.getLeft().getIdAsString());
+                    id = altPair.getLeft();
+                    entry = altEntry;
+                    resultStacks = entry.getStacks(map);
+                    resultStack = resultStacks.getFirst();
+                    resultCount = resultStack.getCount();
+                    category = entry.category();
+                    type = altType;
+                }
+            }
+        }
 
         // Stacks was already verified
         if (entry.craftingRequirements().isPresent())
         {
             List<Ingredient> ingredients = entry.craftingRequirements().get();
+
+            // Override for repetitive recipe types; such as Re-Coloring of beds.
+            if (lookupCount > 1 && MaterialListJsonOverrides.INSTANCE.overrideShouldSkipRecipe(itemOverride.getLeft(), ingredients))
+            {
+                pair = lookup.get(1);
+                id = pair.getLeft();
+                entry = pair.getRight();
+
+                if (entry.craftingRequirements().isPresent())
+                {
+//                    Litematica.LOGGER.warn("MaterialListJsonEntry#build(): skipping recipe for [{}]", resultStack.toString());
+                    resultStacks = entry.getStacks(map);
+                    resultStack = resultStacks.getFirst();
+                    resultCount = resultStack.getCount();
+                    category = entry.category();
+                    type = RecipeBookUtils.Type.fromRecipeDisplay(entry.display());
+                    ingredients = entry.craftingRequirements().get();
+                }
+                else
+                {
+                    pair = lookup.getFirst();
+                    id = pair.getLeft();
+                    entry = pair.getRight();
+                }
+            }
 
             result.recipeRequirements.put(id, ingredients);
             result.recipeCategory.put(id, category);
@@ -112,118 +175,77 @@ public class MaterialListJsonEntry
             for (Ingredient ing : ingredients)
             {
                 SlotDisplay display = ing.toDisplay();
-                ItemStack displayStack = display.getFirst(map);
+                List<ItemStack> displayStacks = display.getStacks(map);
+                ItemStack displayStack = displayStacks.getFirst();
                 RegistryEntry<Item> itemEntry = displayStack.getRegistryEntry();
                 RegistryEntryList<Item> ingEntries = ((IMixinIngredient) (Object) ing).malilib_getEntries();
 
                 if (ingEntries.size() > 1)
                 {
-                    itemEntry = overridePrimaryMaterial(ingEntries.get(0));
+                    itemEntry = MaterialListJsonOverrides.INSTANCE.overridePrimaryMaterial(ingEntries.get(0));
                     display = new SlotDisplay.ItemSlotDisplay(itemEntry);
-                    displayStack = itemEntry.value().getDefaultStack();
-                    Litematica.LOGGER.warn("MaterialListJsonEntry#build(): ingredient [{}] reduced to a single item from [{}] entries", itemEntry.getIdAsString(), ingEntries.size());
+                    displayStacks = display.getStacks(map);
+                    displayStack = displayStacks.getFirst();
+//                    LOGGER.warn("build(): ingredient [{}] reduced to a single item from [{}] entries", itemEntry.getIdAsString(), ingEntries.size());
                 }
 
                 if (prevItem != null && prevItem == itemEntry)
                 {
                     // Stop loops.
-                    Litematica.LOGGER.warn("MaterialListJsonEntry#build(): ingredient matches previous item [{}] ... Skipping", prevItem.getIdAsString());
+//                    LOGGER.warn("build(): ingredient matches previous item [{}] ... Skipping", prevItem.getIdAsString());
                     continue;
                 }
 
-                LOGGER.warn("build(): ResultStack: [{}] // Result Count: [{}]", resultStack.toString(), resultCount);
-                int adjustedTotal = total;
+//                LOGGER.warn("build(): ResultStack: [{}] // Result Count: [{}] // total: [{}]", resultStack.toString(), resultCount, itemOverride.getRight());
+                int adjustedTotal = itemOverride.getRight();
 
                 if (resultCount > 1)
                 {
-                    final float adjusted = ((float) total / resultCount);
-                    final int floor = MathHelper.floor(adjusted);
-                    final int remainderCount = MathHelper.floor(resultCount * (adjusted - floor));
+//                    final float adjusted = ((float) itemOverride.getRight() / resultCount);
+                    final Fraction adjusted = Fraction.getFraction(itemOverride.getRight(), resultCount);
+                    final int floor = MathHelper.floor(adjusted.floatValue());
+                    final float remainderCalc = resultCount * (adjusted.floatValue() - floor);
+                    final int remainderCount = Math.round(remainderCalc);
                     adjustedTotal = Math.max(floor + (remainderCount > 0 ? 1 : 0), (remainderCount > 0 ? 1 : 0));
 
-                    LOGGER.warn("build(): adjusted: [{}], floor: [{}] // remainderCount: [{}] // AdjustedTotal: [{}]", adjusted, floor, remainderCount, adjustedTotal);
+//                    LOGGER.warn("build(): orgTotal: [{}], resultCount: [{}] --> adjusted: [{}], floor: [{}] // remainderCalc: [{}], remainderCount: [{}] // AdjustedTotal: [{}]", itemOverride.getRight(), resultCount, adjusted, floor, remainderCalc, remainderCount, adjustedTotal);
                 }
 
                 if (ded.containsKey(itemEntry))
                 {
-                    final int count = ded.get(itemEntry) + adjustedTotal;
+                    final int count = (ded.get(itemEntry) + adjustedTotal);
+//                    LOGGER.warn("build(): ded combine entry [{}] // adjTotal: [{}] --> count [{}]", itemEntry.getIdAsString(), adjustedTotal, count);
                     ded.put(itemEntry, count);
                 }
                 else
                 {
+//                    LOGGER.warn("build(): ded single entry [{}] // adjTotal: [{}]", itemEntry.getIdAsString(), adjustedTotal);
                     ded.put(itemEntry, adjustedTotal);
                 }
             }
 
-            Litematica.LOGGER.warn("MaterialListJsonEntry#build(): Found [{}] sub-materials(s) for item [{}]", ded.size(), input.getIdAsString());
+//            LOGGER.error("MaterialListJsonEntry#build(): Found [{}] sub-materials(s) for item [{}]", ded.size(), itemOverride.getLeft().getIdAsString());
 
+            // Ignore IDEA warnings here.
             ded.forEach(
                     (key, count) ->
-                            result.requirements.add(new MaterialListJsonBase(key, count, input))
+                            result.requirements.add(new MaterialListJsonBase(key, count, itemOverride.getLeft(), craftingOnly))
             );
         }
 
         return result;
     }
 
-    // Overrides for re-dying recipe's
-    private static RegistryEntry<Item> overridePrimaryMaterial(RegistryEntry<Item> firstItem)
-    {
-        if (firstItem.isIn(ItemTags.WOOL))
-        {
-            return Registries.ITEM.getEntry(Items.WHITE_WOOL);
-        }
-        else if (firstItem.isIn(ItemTags.WOOL_CARPETS))
-        {
-            return Registries.ITEM.getEntry(Items.WHITE_CARPET);
-        }
-        else if (firstItem.isIn(ItemTags.CANDLES))
-        {
-            return Registries.ITEM.getEntry(Items.CANDLE);
-        }
-        else if (firstItem.isIn(ItemTags.SHULKER_BOXES))
-        {
-            return Registries.ITEM.getEntry(Items.SHULKER_BOX);
-        }
-        else if (firstItem.isIn(ItemTags.BANNERS))
-        {
-            return Registries.ITEM.getEntry(Items.WHITE_BANNER);
-        }
-        else if (firstItem.isIn(ItemTags.TERRACOTTA))
-        {
-            return Registries.ITEM.getEntry(Items.TERRACOTTA);
-        }
-        else if (firstItem.isIn(ItemTags.BUNDLES))
-        {
-            return Registries.ITEM.getEntry(Items.BUNDLE);
-        }
-        else if (firstItem.isIn(ItemTags.HARNESSES))
-        {
-            return Registries.ITEM.getEntry(Items.WHITE_HARNESS);
-        }
-        else if (CachedTagManager.matchItemTag(CachedTagManager.GLASS_ITEMS_KEY, firstItem))
-        {
-            return Registries.ITEM.getEntry(Items.GLASS);
-        }
-        else if (CachedTagManager.matchItemTag(CachedTagManager.GLASS_PANE_ITEMS_KEY, firstItem))
-        {
-            return Registries.ITEM.getEntry(Items.GLASS_PANE);
-        }
-        else if (CachedTagManager.matchItemTag(CachedTagManager.CONCRETE_POWDER_ITEMS_KEY, firstItem))
-        {
-            return Registries.ITEM.getEntry(Items.WHITE_CONCRETE_POWDER);
-        }
-        else if (CachedTagManager.matchItemTag(CachedTagManager.CONCRETE_ITEMS_KEY, firstItem))
-        {
-            return Registries.ITEM.getEntry(Items.WHITE_CONCRETE);
-        }
-        else if (CachedTagManager.matchItemTag(CachedTagManager.GLAZED_TERRACOTTA_ITEMS_KEY, firstItem))
-        {
-            return Registries.ITEM.getEntry(Items.WHITE_GLAZED_TERRACOTTA);
-        }
-
-        return firstItem;
-    }
+//    private static void dumpDisplayStacks(List<ItemStack> list)
+//    {
+//        LOGGER.info("dumpDisplayStacks() size [{}]", list.size());
+//
+//        for (int i = 0; i < list.size(); i++)
+//        {
+//            ItemStack entry = list.get(i);
+//            LOGGER.info("[{}] stack [{}]", i, entry.toString());
+//        }
+//    }
 
     public Type getType() { return this.type; }
 

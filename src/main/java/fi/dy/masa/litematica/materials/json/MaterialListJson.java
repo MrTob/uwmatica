@@ -10,18 +10,18 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
-import org.jetbrains.annotations.ApiStatus;
 
 import com.mojang.serialization.JsonOps;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.item.Item;
 import net.minecraft.registry.DynamicRegistryManager;
 import net.minecraft.registry.RegistryOps;
+import net.minecraft.registry.entry.RegistryEntry;
 
 import fi.dy.masa.litematica.Litematica;
 import fi.dy.masa.litematica.materials.MaterialListBase;
 import fi.dy.masa.litematica.materials.MaterialListEntry;
 
-@ApiStatus.Experimental
 public class MaterialListJson
 {
     private final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -37,7 +37,7 @@ public class MaterialListJson
         return this.data;
     }
 
-    public boolean readMaterialListAll(MaterialListBase materialList, MaterialListJsonCache cache)
+    public boolean readMaterialListAll(MaterialListBase materialList, MaterialListJsonCache cache, boolean craftingOnly)
     {
         ImmutableList<MaterialListEntry> materials = materialList.getMaterialsAll();
 
@@ -51,18 +51,22 @@ public class MaterialListJson
         materials.forEach(
                 (entry) ->
                 {
-                    MaterialListJsonBase base = new MaterialListJsonBase(entry.getStack().getRegistryEntry(), (entry.getStack().getCount() * entry.getCountTotal()), null);
+                    RegistryEntry<Item> resultItem = entry.getStack().getRegistryEntry();
+                    final int total = (entry.getStack().getCount() * entry.getCountTotal());
+                    MaterialListJsonBase base = new MaterialListJsonBase(resultItem, total, null, craftingOnly);
+
                     this.data.add(base);
-                    cache.buildStepsBase(base, new ArrayList<>());
+                    cache.buildStepsBase(base, new ArrayList<>(), new MaterialListJsonCache.Result(resultItem, total));
                 }
         );
 
-        cache.simplifyEntrySteps();
+        cache.simplifyFlatEntrySteps();
+        cache.repackCombinedEntries();
 
         return true;
     }
 
-    public boolean readMaterialListMissingOnly(MaterialListBase materialList, MaterialListJsonCache cache)
+    public boolean readMaterialListMissingOnly(MaterialListBase materialList, MaterialListJsonCache cache, boolean craftingOnly)
     {
         List<MaterialListEntry> materials = materialList.getMaterialsMissingOnly(false);
 
@@ -76,18 +80,22 @@ public class MaterialListJson
         materials.forEach(
                 (entry) ->
                 {
-                    MaterialListJsonBase base = new MaterialListJsonBase(entry.getStack().getRegistryEntry(), (entry.getStack().getCount() * entry.getCountTotal()), null);
+                    RegistryEntry<Item> resultItem = entry.getStack().getRegistryEntry();
+                    final int total = (entry.getStack().getCount() * entry.getCountTotal());
+                    MaterialListJsonBase base = new MaterialListJsonBase(resultItem, total, null, craftingOnly);
+
                     this.data.add(base);
-                    cache.buildStepsBase(base, new ArrayList<>());
+                    cache.buildStepsBase(base, new ArrayList<>(), new MaterialListJsonCache.Result(resultItem, total));
                 }
         );
 
-        cache.simplifyEntrySteps();
+        cache.simplifyFlatEntrySteps();
+        cache.repackCombinedEntries();
 
         return true;
     }
 
-    public boolean writeJson(Path file, MinecraftClient mc)
+    public boolean writeRecipeDetailJson(Path file, MinecraftClient mc)
     {
         if (this.data.isEmpty() || mc.world == null)
         {
@@ -120,9 +128,9 @@ public class MaterialListJson
         }
     }
 
-    public boolean writeCacheJson(MaterialListJsonCache cache, Path file, MinecraftClient mc)
+    public boolean writeCacheFlatJson(MaterialListJsonCache cache, Path file, MinecraftClient mc)
     {
-        if (cache.isEmpty() || mc.world == null)
+        if (cache.isEmptyFlat() || mc.world == null)
         {
             return false;
         }
@@ -135,20 +143,53 @@ public class MaterialListJson
             }
             catch (IOException err)
             {
-                Litematica.LOGGER.error("MaterialListJson#writeCacheJson(): Exception deleting file '{}'; {}", file.toAbsolutePath().toString(), err.getLocalizedMessage());
+                Litematica.LOGGER.error("MaterialListJson#writeCacheFlatJson(): Exception deleting file '{}'; {}", file.toAbsolutePath().toString(), err.getLocalizedMessage());
                 return false;
             }
         }
 
         try
         {
-            Files.writeString(file, GSON.toJson(cache.toJson(mc.world.getRegistryManager().getOps(JsonOps.INSTANCE))));
-            Litematica.LOGGER.info("MaterialListJson#writeCacheJson(): Exported Materials Cache file '{}' successfully.", file.toAbsolutePath().toString());
+            Files.writeString(file, GSON.toJson(cache.toFlatJson(mc.world.getRegistryManager().getOps(JsonOps.INSTANCE))));
+            Litematica.LOGGER.info("MaterialListJson#writeCacheFlatJson(): Exported Materials Cache file '{}' successfully.", file.toAbsolutePath().toString());
             return true;
         }
         catch (IOException err)
         {
-            Litematica.LOGGER.error("MaterialListJson#writeCacheJson(): Exception writing file '{}'; {}", file.toAbsolutePath().toString(), err.getLocalizedMessage());
+            Litematica.LOGGER.error("MaterialListJson#writeCacheFlatJson(): Exception writing file '{}'; {}", file.toAbsolutePath().toString(), err.getLocalizedMessage());
+            return false;
+        }
+    }
+
+    public boolean writeCacheCombinedJson(MaterialListJsonCache cache, Path file, MinecraftClient mc)
+    {
+        if (cache.isEmptyCombined() || mc.world == null)
+        {
+            return false;
+        }
+
+        if (Files.exists(file))
+        {
+            try
+            {
+                Files.delete(file);
+            }
+            catch (IOException err)
+            {
+                Litematica.LOGGER.error("MaterialListJson#writeCacheCombinedJson(): Exception deleting file '{}'; {}", file.toAbsolutePath().toString(), err.getLocalizedMessage());
+                return false;
+            }
+        }
+
+        try
+        {
+            Files.writeString(file, GSON.toJson(cache.toCombinedJson(mc.world.getRegistryManager().getOps(JsonOps.INSTANCE))));
+            Litematica.LOGGER.info("MaterialListJson#writeCacheCombinedJson(): Exported Materials Cache file '{}' successfully.", file.toAbsolutePath().toString());
+            return true;
+        }
+        catch (IOException err)
+        {
+            Litematica.LOGGER.error("MaterialListJson#writeCacheCombinedJson(): Exception writing file '{}'; {}", file.toAbsolutePath().toString(), err.getLocalizedMessage());
             return false;
         }
     }

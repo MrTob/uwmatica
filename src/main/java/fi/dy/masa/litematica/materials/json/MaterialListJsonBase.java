@@ -6,7 +6,6 @@ import javax.annotation.Nullable;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
-import org.jetbrains.annotations.ApiStatus;
 
 import net.minecraft.item.Item;
 import net.minecraft.recipe.Ingredient;
@@ -16,9 +15,7 @@ import net.minecraft.registry.entry.RegistryEntry;
 
 import fi.dy.masa.malilib.mixin.recipe.IMixinIngredient;
 import fi.dy.masa.malilib.util.game.RecipeBookUtils;
-import fi.dy.masa.litematica.Litematica;
 
-@ApiStatus.Experimental
 public class MaterialListJsonBase
 {
     private final RegistryEntry<Item> input;
@@ -28,18 +25,18 @@ public class MaterialListJsonBase
     private @Nullable MaterialListJsonEntry materialsFurnace;
     private @Nullable MaterialListJsonEntry materialsRemaining;
 
-    public MaterialListJsonBase(final RegistryEntry<Item> input, final int count, @Nullable RegistryEntry<Item> prevItem)
+    public MaterialListJsonBase(final RegistryEntry<Item> input, final int count, @Nullable RegistryEntry<Item> prevItem, boolean craftingOnly)
     {
         this.input = input;
         this.count = count;
         boolean matched = false;
 
-        MaterialListJsonEntry entryStonecutter = MaterialListJsonEntry.build(input, count, List.of(RecipeBookUtils.Type.STONECUTTER), prevItem);
+        MaterialListJsonEntry entryStonecutter = MaterialListJsonEntry.build(input, count, List.of(RecipeBookUtils.Type.STONECUTTER), prevItem, craftingOnly);
         if (entryStonecutter != null && entryStonecutter.hasOutput())
         {
             if (this.checkIfLoop(entryStonecutter, input, prevItem))
             {
-                this.materialsRemaining = MaterialListJsonEntry.build(input, count, List.of(), prevItem);
+                this.materialsRemaining = MaterialListJsonEntry.build(input, count, List.of(), prevItem, craftingOnly);
                 return;
             }
 
@@ -47,12 +44,12 @@ public class MaterialListJsonBase
             matched = true;
         }
 
-        MaterialListJsonEntry entryCrafting = MaterialListJsonEntry.build(input, count, List.of(RecipeBookUtils.Type.SHAPED, RecipeBookUtils.Type.SHAPELESS), prevItem);
+        MaterialListJsonEntry entryCrafting = MaterialListJsonEntry.build(input, count, List.of(RecipeBookUtils.Type.SHAPED, RecipeBookUtils.Type.SHAPELESS), prevItem, craftingOnly);
         if (entryCrafting != null && entryCrafting.hasOutput())
         {
             if (this.checkIfLoop(entryCrafting, input, prevItem))
             {
-                this.materialsRemaining = MaterialListJsonEntry.build(input, count, List.of(), prevItem);
+                this.materialsRemaining = MaterialListJsonEntry.build(input, count, List.of(), prevItem, craftingOnly);
                 return;
             }
 
@@ -60,14 +57,26 @@ public class MaterialListJsonBase
             matched = true;
         }
 
+        if (matched && this.materialsCrafting != null && this.materialsStonecutter != null)
+        {
+            if (craftingOnly)
+            {
+                this.materialsStonecutter = null;
+            }
+            else
+            {
+                this.materialsCrafting = null;
+            }
+        }
+
         if (!matched)
         {
-            MaterialListJsonEntry entryFurnace = MaterialListJsonEntry.build(input, count, List.of(RecipeBookUtils.Type.FURNACE), prevItem);
+            MaterialListJsonEntry entryFurnace = MaterialListJsonEntry.build(input, count, List.of(RecipeBookUtils.Type.FURNACE), prevItem, craftingOnly);
             if (entryFurnace != null && entryFurnace.hasOutput())
             {
                 if (this.checkIfLoop(entryFurnace, input, prevItem))
                 {
-                    this.materialsRemaining = MaterialListJsonEntry.build(input, count, List.of(), prevItem);
+                    this.materialsRemaining = MaterialListJsonEntry.build(input, count, List.of(), prevItem, craftingOnly);
                     return;
                 }
 
@@ -79,7 +88,7 @@ public class MaterialListJsonBase
         // No matches, so add it to the remaining.
         if (!matched)
         {
-            MaterialListJsonEntry entryRemaining = MaterialListJsonEntry.build(input, count, List.of(), prevItem);
+            MaterialListJsonEntry entryRemaining = MaterialListJsonEntry.build(input, count, List.of(), prevItem, craftingOnly);
 
             if (entryRemaining != null)
             {
@@ -134,7 +143,7 @@ public class MaterialListJsonBase
         HashMap<NetworkRecipeId, List<Ingredient>> recipeReq = entry.getRecipeRequirements();
         HashMap<NetworkRecipeId, RecipeBookUtils.Type> recipeTypes = entry.getRecipeTypes();
 
-        Litematica.LOGGER.warn("checkIfLoop(): input: [{}], prev: [{}]", inputItem.getIdAsString(), prevItem != null ? prevItem.getIdAsString() : "<>");
+//        Litematica.LOGGER.warn("checkIfLoop(): input: [{}], prev: [{}]", inputItem.getIdAsString(), prevItem != null ? prevItem.getIdAsString() : "<>");
 
         if (!recipeReq.isEmpty() && !recipeTypes.isEmpty())
         {
